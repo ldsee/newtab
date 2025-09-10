@@ -42,17 +42,21 @@ function with_lock($key,$fn,$timeout_ms=150){
 }
 
 function fetch_with_cache($key,$ttl,$fetcher,$opts=[]){
-  $ttl=jitter_ttl($ttl,$opts['jitter_pct']??0.1);
-  $file=cache_path($key); $stale=$opts['stale_if_error']??true;
-  $fresh=file_exists($file) && (time()-filemtime($file) < $ttl);
-  if($fresh){ $d=read_json($file); if($d!==null) return $d; }
-  return with_lock($key, function($locked) use ($file,$fetcher,$stale){
+  $file=cache_path($key); $stale=$opts['stale_if_error']??true; $j=$opts['jitter_pct']??0.1; $now=time();
+  $c=read_json($file);
+  if(is_array($c) && isset($c['_expires']) && $c['_expires']>$now){ return $c['data']??null; }
+  if($c!==null && file_exists($file) && ($now-filemtime($file)<$ttl)){ return $c; }
+  return with_lock($key, function($locked) use ($file,$fetcher,$stale,$ttl,$j,$now){
     if($locked){
-      $d=$fetcher(); if($d!==null){ write_json($file,$d); return $d; }
-      if($stale && file_exists($file)){ $f=read_json($file); if($f!==null) return $f; } return null;
+      $d=$fetcher(); if($d!==null){ write_json($file,['data'=>$d,'_expires'=>$now+jitter_ttl($ttl,$j)]); return $d; }
+      if($stale && file_exists($file)){ $f=read_json($file); if($f!==null) return isset($f['_expires'])?($f['data']??null):$f; } return null;
     } else {
-      if(file_exists($file)){ $f=read_json($file); if($f!==null) return $f; }
-      $d=$fetcher(); if($d!==null) write_json($file,$d); return $d;
+      $f=read_json($file); if($f!==null){
+        if(isset($f['_expires']) && $f['_expires']>$now){ return $f['data']??null; }
+        if($now-filemtime($file)<$ttl){ return $f; }
+      }
+      $d=$fetcher(); if($d!==null){ write_json($file,['data'=>$d,'_expires'=>$now+jitter_ttl($ttl,$j)]); return $d; }
+      return $d;
     }
   });
 }
